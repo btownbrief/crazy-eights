@@ -100,6 +100,42 @@ function sortedHand(hand) {
     (RANK_SORT.indexOf(rankOf(a)) - RANK_SORT.indexOf(rankOf(b))));
 }
 
+/* Hand layout: every card must keep a thumb-sized strip (≥44px) tappable.
+ * Small hands keep the classic overlapping fan; once one row can't give
+ * every card 44px, the hand wraps into a flat rack of 2 (rarely 3) rows,
+ * shrinking cards a touch only when even a rack row would overflow. */
+const MIN_TAP = 44;     // minimum exposed tappable width per card
+const MIN_CARD_W = 48;  // don't shrink cards into unreadability
+const FAN_PAD = 18;     // #hand side padding — keep in sync with style.css
+const RACK_PAD = 6;     // #hand.wrap side padding — keep in sync with style.css
+
+function handLayout(handEl, n) {
+  const total = handEl.clientWidth || window.innerWidth;
+  // resolve the CSS card width (a clamp() in style.css) with a probe
+  const probe = document.createElement('div');
+  probe.className = 'card';
+  probe.style.visibility = 'hidden';
+  handEl.appendChild(probe);
+  const baseW = probe.getBoundingClientRect().width || 64; // sub-pixel exact
+  probe.remove();
+
+  // one-row fan: classic overlap, widened to MIN_TAP where it was tighter
+  const fanAvail = total - FAN_PAD * 2;
+  const fanExposure = Math.max(MIN_TAP, baseW * 0.56);
+  if (n <= 1 || (n - 1) * fanExposure + baseW <= fanAvail) {
+    return { rows: 1, cardW: baseW, baseW, exposure: fanExposure };
+  }
+
+  // multi-row rack: flat cards, MIN_TAP strips, spread to fill the row
+  const rackAvail = total - RACK_PAD * 2;
+  const maxPerRow = Math.max(2, Math.floor((rackAvail - MIN_CARD_W) / MIN_TAP) + 1);
+  const rows = Math.max(2, Math.ceil(n / maxPerRow));
+  const perRow = Math.ceil(n / rows);
+  const cardW = Math.max(MIN_CARD_W, Math.min(baseW, rackAvail - (perRow - 1) * MIN_TAP));
+  const exposure = Math.min(cardW, (rackAvail - cardW) / Math.max(perRow - 1, 1));
+  return { rows, cardW, baseW, exposure };
+}
+
 /* ---------------------------------------------------------------- render */
 
 function render(fx = {}) {
@@ -160,19 +196,35 @@ function render(fx = {}) {
     : playerName(handOwner) + "'s hand";
   const handEl = $('hand');
   handEl.innerHTML = '';
+  handEl.classList.remove('wrap');
+  handEl.style.removeProperty('--card-w');
+  handEl.style.removeProperty('--fan-ml');
   if (handRevealed) {
     const cards = sortedHand(state.hands[handOwner]);
     const lastDrawn = (state.lastAction?.type === 'draw' && state.lastAction.player === handOwner)
       ? state.hands[handOwner][state.hands[handOwner].length - 1] : null;
     // fan the hand: small rotation per card around a low pivot, with the
-    // ends of the arc dipping slightly — like cards held in a hand
+    // ends of the arc dipping slightly — like cards held in a hand.
+    // Big hands drop the fan and wrap into a flat rack instead.
     const n = cards.length;
+    const layout = handLayout(handEl, n);
+    const rack = layout.rows > 1;
+    if (layout.cardW !== layout.baseW) handEl.style.setProperty('--card-w', layout.cardW + 'px');
+    handEl.style.setProperty('--fan-ml', (layout.exposure - layout.cardW).toFixed(2) + 'px');
+    handEl.classList.toggle('wrap', rack);
+    const perRow = Math.ceil(n / layout.rows);
     const mid = (n - 1) / 2;
-    const spread = Math.min(4.5, 36 / Math.max(n, 1)); // degrees between cards
+    const spread = rack ? 0 : Math.min(4.5, 36 / Math.max(n, 1)); // degrees between cards
     cards.forEach((card, i) => {
+      if (rack && i > 0 && i % perRow === 0) {
+        const br = document.createElement('div');
+        br.className = 'hand-break';
+        handEl.appendChild(br);
+      }
       const el = cardEl(card);
       el.style.setProperty('--rot', ((i - mid) * spread).toFixed(2) + 'deg');
-      el.style.setProperty('--arc', Math.min(18, Math.pow(Math.abs(i - mid), 1.7) * 1.5).toFixed(1) + 'px');
+      el.style.setProperty('--arc', rack ? '0px'
+        : Math.min(18, Math.pow(Math.abs(i - mid), 1.7) * 1.5).toFixed(1) + 'px');
       if (myTurn && playable.has(card)) el.classList.add('playable');
       if (fx.dealAll) { el.classList.add('deal-in'); el.style.animationDelay = (i * 45) + 'ms'; }
       else if (card === lastDrawn && fx.drew) el.classList.add('deal-in');
@@ -428,5 +480,10 @@ $('againBtn').addEventListener('click', () => {
 });
 
 /* ---------------------------------------------------------------- boot */
+
+// the hand layout is measured at render time, so re-lay it on rotate/resize
+window.addEventListener('resize', () => {
+  if (G && !screens.game.classList.contains('hidden')) render();
+});
 
 goMenu();
