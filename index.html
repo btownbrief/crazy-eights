@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#123524">
+<title>CRAZY EIGHTS — The Burlington Deck</title>
+<meta name="description" content="Crazy Eights on the Burlington deck — play a hand against Champ or pass the phone around the table. A Btown Games production from the BTown Brief.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="CRAZY EIGHTS — The Burlington Deck">
+<meta property="og:description" content="Eights are wild and the felt is Green Mountain green. Beat Champ at cards or pass the phone around the table.">
+<meta property="og:url" content="https://play.btownbrief.com/crazy-eights/">
+<meta property="og:image" content="https://play.btownbrief.com/crazy-eights/icon-180.png">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- Title screen -->
+  <div id="menu" class="screen">
+    <div class="menu-inner">
+      <div id="logo" aria-label="Crazy Eights">
+        <span class="l-crazy">CRAZY</span>
+        <span class="l-eights"><i>E</i><i>I</i><i>G</i><i>H</i><i>T</i><i>S</i></span>
+        <span class="l-deck">🍁 the Burlington deck 🍁</span>
+      </div>
+      <div id="tagline">Match the suit, match the rank —<br>and remember: eights are wild.</div>
+
+      <button id="resumeBtn" class="big-btn hidden">↩&nbsp; BACK TO THE TABLE</button>
+      <button id="botBtn" class="big-btn">🐉&nbsp; DEAL ME IN vs CHAMP</button>
+
+      <div id="passSetup">
+        <button id="passBtn" class="mode-btn">📱 PASS &amp; PLAY</button>
+        <div id="countRow" class="hidden">
+          <span class="count-label">HOW MANY AT THE TABLE?</span>
+          <div class="count-btns">
+            <button class="count-btn" data-n="2">2</button>
+            <button class="count-btn" data-n="3">3</button>
+            <button class="count-btn" data-n="4">4</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="howto">
+        <div class="howto-line"><span class="key">TAP A CARD</span> to play it</div>
+        <div class="howto-line"><span class="key">TAP THE PILE</span> to draw (3 max, then pass)</div>
+      </div>
+    </div>
+    <footer id="credit">
+      A Btown Games production · <a href="https://www.btownbrief.com" target="_blank" rel="noopener">Read the BTown Brief →</a>
+    </footer>
+  </div>
+
+  <!-- Pass-the-phone interstitial -->
+  <div id="handoff" class="screen hidden">
+    <div class="menu-inner">
+      <div class="handoff-card">
+        <div class="handoff-emoji">🤝</div>
+        <div id="handoffTitle">Pass the phone to Player 2</div>
+        <div class="handoff-sub">No peeking — it's a small town, word gets around.</div>
+        <button id="handoffBtn" class="big-btn">👀&nbsp; SHOW MY HAND</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Game table -->
+  <div id="game" class="hidden">
+    <div id="mountains" aria-hidden="true"></div>
+
+    <div id="topbar">
+      <button id="homeBtn" aria-label="Back to menu">🏠</button>
+      <div id="opponents"></div>
+    </div>
+
+    <div id="table">
+      <div id="piles">
+        <div id="stockWrap">
+          <div id="stock" role="button" aria-label="Draw a card">
+            <div class="cardback"><span>🍁</span></div>
+            <div class="cardback under u1"></div>
+            <div class="cardback under u2"></div>
+          </div>
+          <div id="stockCount"></div>
+        </div>
+        <div id="discardWrap">
+          <div id="discard"></div>
+          <div id="suitBadge" title="Suit to match"></div>
+        </div>
+      </div>
+      <div id="msg"></div>
+      <button id="passTurnBtn" class="chip-btn hidden">🤷&nbsp; PASS — NOTHING DOING</button>
+    </div>
+
+    <div id="handArea">
+      <div id="handLabel"></div>
+      <div id="hand"></div>
+    </div>
+
+    <!-- suit picker for 8s -->
+    <div id="suitPicker" class="overlay hidden">
+      <div class="picker-card">
+        <div class="picker-title">Wild eight! Call the suit:</div>
+        <div class="picker-suits">
+          <button class="suit-btn red" data-suit="H">♥</button>
+          <button class="suit-btn red" data-suit="D">♦</button>
+          <button class="suit-btn" data-suit="S">♠</button>
+          <button class="suit-btn" data-suit="C">♣</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- big suit-change banner after an 8 -->
+    <div id="suitBanner" class="hidden"></div>
+  </div>
+
+  <!-- Round over -->
+  <div id="gameover" class="screen hidden">
+    <div class="menu-inner">
+      <div id="go-card">
+        <div id="go-title"></div>
+        <div id="go-line"></div>
+        <div id="go-btns">
+          <button id="againBtn" class="big-btn">↻&nbsp; RUN IT BACK</button>
+          <button id="menuBtn" class="chip-btn">🏠&nbsp; MENU</button>
+        </div>
+        <a id="brief-cta" href="https://www.btownbrief.com" target="_blank" rel="noopener">
+          🗞️ Champ reads it. So should you.<br><strong>Read the BTown Brief →</strong>
+        </a>
+      </div>
+    </div>
+    <footer id="credit-go">
+      A Btown Games production · <a href="https://www.btownbrief.com" target="_blank" rel="noopener">Read the BTown Brief →</a>
+    </footer>
+  </div>
+
+</div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

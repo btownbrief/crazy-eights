@@ -1,0 +1,14 @@
+{
+  "name": "CRAZY EIGHTS — The Burlington Deck",
+  "short_name": "Crazy Eights",
+  "description": "Crazy Eights on the Burlington deck — beat Champ or pass the phone. A Btown Games production.",
+  "start_url": ".",
+  "display": "fullscreen",
+  "orientation": "portrait",
+  "background_color": "#123524",
+  "theme_color": "#123524",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "icon-180.png", "sizes": "180x180", "type": "image/png" }
+  ]
+}
