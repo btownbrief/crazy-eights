@@ -86,6 +86,14 @@ function cardEl(card) {
   return el;
 }
 
+/* Stable pseudo-random tilt for a card in the discard pile (pure function
+ * of the card string, so re-renders don't make the pile twitch). */
+function cardTilt(card) {
+  let h = 0;
+  for (const ch of card) h = (h * 31 + ch.charCodeAt(0)) | 0;
+  return ((Math.abs(h) % 17) - 8);
+}
+
 function sortedHand(hand) {
   return hand.slice().sort((a, b) =>
     (SUIT_ORDER[suitOf(a)] - SUIT_ORDER[suitOf(b)]) ||
@@ -124,9 +132,16 @@ function render(fx = {}) {
     stock.classList.remove('bump'); void stock.offsetWidth; stock.classList.add('bump');
   }
 
-  // discard + suit badge
+  // discard + suit badge — show a couple of earlier plays peeking out
+  // underneath so it reads as a real pile
   const discard = $('discard');
   discard.innerHTML = '';
+  for (const under of state.discard.slice(-3, -1)) {
+    const el = cardEl(under);
+    el.classList.add('under');
+    el.style.transform = `rotate(${cardTilt(under)}deg)`;
+    discard.appendChild(el);
+  }
   const top = cardEl(topCard(state));
   if (fx.slap) top.classList.add('slap');
   discard.appendChild(top);
@@ -149,8 +164,15 @@ function render(fx = {}) {
     const cards = sortedHand(state.hands[handOwner]);
     const lastDrawn = (state.lastAction?.type === 'draw' && state.lastAction.player === handOwner)
       ? state.hands[handOwner][state.hands[handOwner].length - 1] : null;
+    // fan the hand: small rotation per card around a low pivot, with the
+    // ends of the arc dipping slightly — like cards held in a hand
+    const n = cards.length;
+    const mid = (n - 1) / 2;
+    const spread = Math.min(4.5, 36 / Math.max(n, 1)); // degrees between cards
     cards.forEach((card, i) => {
       const el = cardEl(card);
+      el.style.setProperty('--rot', ((i - mid) * spread).toFixed(2) + 'deg');
+      el.style.setProperty('--arc', Math.min(18, Math.pow(Math.abs(i - mid), 1.7) * 1.5).toFixed(1) + 'px');
       if (myTurn && playable.has(card)) el.classList.add('playable');
       if (fx.dealAll) { el.classList.add('deal-in'); el.style.animationDelay = (i * 45) + 'ms'; }
       else if (card === lastDrawn && fx.drew) el.classList.add('deal-in');

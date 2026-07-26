@@ -32,6 +32,7 @@ Plain static site — no build step. `index.html` + `style.css` + ES modules in 
 | `js/engine.js` | **all** the rules, as pure functions over one JSON-serializable state object (seeded RNG lives in the state — same seed, same deal) |
 | `js/bot.js` | Champ's brain — picks among the engine's legal moves (dumps its majority suit, saves 8s for when it's stuck, declares its longest suit) |
 | `js/main.js` | UI only: screens, taps, animations, bot pacing, pass-the-phone handoffs, localStorage resume |
+| `img/church-street-autumn.jpg` | Church Street under the fall maples (from the where-in-btown photo collection) — dimmed backdrop on the menu and round-over screens |
 
 The engine/UI split is deliberate: online multiplayer later just means
 syncing the engine's state object between phones. Rule logic anywhere
