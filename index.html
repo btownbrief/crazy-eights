@@ -49,11 +49,65 @@
         </div>
       </div>
 
+      <div id="onlineSetup">
+        <div class="online-label">or deal across town — 2 to 4 phones</div>
+        <div id="onlineRow">
+          <button id="hostBtn" class="mode-btn">
+            <span class="online-name">🍁 START A CREW</span>
+            <span class="online-blurb">get a code</span>
+          </button>
+          <button id="joinBtn" class="mode-btn">
+            <span class="online-name">🔑 JOIN A CREW</span>
+            <span class="online-blurb">bring a code</span>
+          </button>
+        </div>
+        <button id="rejoinBtn" class="chip-btn hidden"></button>
+      </div>
+
       <div id="howto">
         <div class="howto-line"><span class="key">TAP A CARD</span> to play it</div>
         <div class="howto-line"><span class="key">TAP THE PILE</span> to draw (3 max, then pass)</div>
       </div>
     </div>
+
+    <!-- Online setup: name, crew size for hosts, and code for joiners -->
+    <div id="onlinePanel" class="overlay hidden">
+      <div class="op-card">
+        <div id="opTitle" class="op-title">START A CREW</div>
+        <label class="op-label" for="opName">YOUR NAME</label>
+        <input id="opName" maxlength="24" autocomplete="nickname" placeholder="Card sharp">
+        <div id="opSeatsWrap">
+          <div class="op-label">PHONES AT THE TABLE</div>
+          <div id="opSeats" class="seat-btns" role="group" aria-label="Phones at the table">
+            <button class="seat-btn selected" data-seats="2" aria-pressed="true">2</button>
+            <button class="seat-btn" data-seats="3" aria-pressed="false">3</button>
+            <button class="seat-btn" data-seats="4" aria-pressed="false">4</button>
+          </div>
+        </div>
+        <div id="opCodeWrap" class="hidden">
+          <label class="op-label" for="opCode">CREW CODE</label>
+          <input id="opCode" maxlength="4" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="ABCD">
+        </div>
+        <div id="opError" class="op-error hidden"></div>
+        <div class="op-btns">
+          <button id="opCancel" class="chip-btn">BACK</button>
+          <button id="opGo" class="big-btn">GET A CODE</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Lobby: wait until the final seat joins -->
+    <div id="lobby" class="overlay hidden">
+      <div class="op-card">
+        <div class="op-title">READ THIS CODE TO YOUR CREW</div>
+        <div id="lobbyCode"></div>
+        <div id="lobbyHint">they tap <b>JOIN A CREW</b> and type it in</div>
+        <div class="lobby-label">AT THE TABLE</div>
+        <ul id="lobbyNames" aria-live="polite"></ul>
+        <div class="op-btns"><button id="lobbyCancel" class="chip-btn">CALL IT OFF</button></div>
+      </div>
+    </div>
+
     <footer id="credit">
       A Btown Games production · <a href="https://play.btownbrief.com/" target="_blank" rel="noopener">More games →</a> · <a href="https://www.btownbrief.com" target="_blank" rel="noopener">Read the BTown Brief →</a>
     </footer>

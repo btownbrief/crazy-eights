@@ -8,8 +8,10 @@ import {
   rankOf, suitOf, topCard,
 } from './engine.js';
 import { chooseMove } from './bot.js';
+import { OnlineMatch, savedSession, clearSession, getName } from './rooms.js';
 
 const SAVE_KEY = 'crazy-eights-save-v1';
+const GAME = 'crazy-eights';
 const BOT = 1; // in bot mode, player 0 is the human, player 1 is Champ
 
 const SUIT_CHAR = { S: '♠', H: '♥', D: '♦', C: '♣' };
@@ -20,11 +22,28 @@ const RANK_SORT = 'A23456789TJQK';
 
 const $ = (id) => document.getElementById(id);
 const screens = { menu: $('menu'), handoff: $('handoff'), game: $('game'), gameover: $('gameover') };
+const onlinePanel = $('onlinePanel');
+const opTitle = $('opTitle');
+const opName = $('opName');
+const opSeatsWrap = $('opSeatsWrap');
+const opCodeWrap = $('opCodeWrap');
+const opCode = $('opCode');
+const opError = $('opError');
+const lobbyEl = $('lobby');
+const lobbyCode = $('lobbyCode');
+const lobbyNames = $('lobbyNames');
+const rejoinBtn = $('rejoinBtn');
 
-let G = null;            // { mode: 'bot' | 'pass', state }
+let G = null;            // { mode: 'bot' | 'pass' | 'online', state }
 let pendingEight = null; // card string waiting on a suit declaration
 let handRevealed = true; // pass & play: false until the handoff button is tapped
 let botTimer = null;
+let online = null;       // { match, myPlayer } while seated in an online crew
+let onlinePushing = false;
+let pollErrors = 0;
+let panelIntent = 'host';
+let selectedSeats = 2;
+let leaveTimer = null;
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -33,15 +52,28 @@ const isRed = (card) => suitOf(card) === 'H' || suitOf(card) === 'D';
 const rankChar = (card) => RANK_CHAR[rankOf(card)] || rankOf(card);
 const suitSpan = (suit) =>
   `<span class="${suit === 'H' || suit === 'D' ? 'red' : ''}">${SUIT_CHAR[suit]}</span>`;
+// Player names arrive from the network; escape them anywhere suit markup
+// requires innerHTML. Everywhere else, insert them with textContent.
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 function playerName(p) {
   if (G.mode === 'bot') return p === BOT ? 'Champ' : 'You';
+  if (G.mode === 'online') {
+    if (p === online.myPlayer) return 'You';
+    const seat = online.match.seats.find((s) => s.seat === p);
+    return seat?.name || 'Player ' + (p + 1);
+  }
   return 'Player ' + (p + 1);
 }
 
 function humanTurn() {
-  return G && getStatus(G.state).status === 'active' &&
-    !(G.mode === 'bot' && G.state.currentPlayer === BOT);
+  if (!G || getStatus(G.state).status !== 'active') return false;
+  if (G.mode === 'bot') return G.state.currentPlayer !== BOT;
+  if (G.mode === 'online') {
+    return !onlinePushing && online && online.match.status === 'playing' &&
+      G.state.currentPlayer === online.myPlayer;
+  }
+  return true;
 }
 
 function show(name) {
@@ -50,9 +82,9 @@ function show(name) {
 
 function save() {
   try {
-    if (G && getStatus(G.state).status === 'active') {
+    if (G && G.mode !== 'online' && getStatus(G.state).status === 'active') {
       localStorage.setItem(SAVE_KEY, JSON.stringify(G));
-    } else {
+    } else if (!G || G.mode !== 'online') {
       localStorage.removeItem(SAVE_KEY);
     }
   } catch (e) { /* private mode etc. — play on without saving */ }
@@ -151,11 +183,15 @@ function render(fx = {}) {
   opps.innerHTML = '';
   for (let p = 0; p < state.numPlayers; p++) {
     if (G.mode === 'bot' && p !== BOT) continue; // your own hand is on the table
+    if (G.mode === 'online' && p === online.myPlayer) continue;
     const chip = document.createElement('div');
     chip.className = 'opp' + (state.currentPlayer === p ? ' active' : '');
-    chip.innerHTML =
-      `<span>${G.mode === 'bot' ? '🐉 Champ' : 'P' + (p + 1)}</span>` +
-      `<span class="opp-count">${state.hands[p].length}</span>`;
+    const name = document.createElement('span');
+    name.textContent = G.mode === 'bot' ? '🐉 Champ' : playerName(p);
+    const count = document.createElement('span');
+    count.className = 'opp-count';
+    count.textContent = state.hands[p].length;
+    chip.append(name, count);
     opps.appendChild(chip);
   }
 
@@ -189,9 +225,12 @@ function render(fx = {}) {
   // pass button
   $('passTurnBtn').classList.toggle('hidden', !(myTurn && mustPass));
 
-  // hand — in bot mode always the human's; in pass mode the current player's
-  const handOwner = G.mode === 'bot' ? 0 : state.currentPlayer;
-  $('handLabel').textContent = G.mode === 'bot'
+  // The shared room carries every hand so each phone can replay the same
+  // state, but the honest online UI renders only this phone's seat.
+  const handOwner = G.mode === 'bot' ? 0
+    : G.mode === 'online' ? online.myPlayer
+      : state.currentPlayer;
+  $('handLabel').textContent = G.mode === 'bot' || G.mode === 'online'
     ? 'your hand'
     : playerName(handOwner) + "'s hand";
   const handEl = $('hand');
@@ -242,7 +281,7 @@ function renderMessage(moves, myTurn, mustPass, canDrawNow) {
   let lines = [];
 
   if (last) {
-    const who = playerName(last.player);
+    const who = esc(playerName(last.player));
     if (last.type === 'play') {
       if (last.declare) {
         lines.push(`${who} threw a wild 8 — suit is now ${suitSpan(last.declare)} ${SUIT_NAME[last.declare]}!`);
@@ -267,10 +306,12 @@ function renderMessage(moves, myTurn, mustPass, canDrawNow) {
       const left = 3 - state.drawnThisTurn;
       lines.push(`No match? Tap the pile to draw (${left} draw${left === 1 ? '' : 's'} left).`);
     } else {
-      lines.push(`${G.mode === 'pass' ? playerName(state.currentPlayer) + ': m' : 'M'}atch ${suitSpan(state.currentSuit)} or ${rank} — or go wild with an 8.`);
+      lines.push(`${G.mode === 'pass' ? esc(playerName(state.currentPlayer)) + ': m' : 'M'}atch ${suitSpan(state.currentSuit)} or ${rank} — or go wild with an 8.`);
     }
   } else if (lines.length === 0) {
-    lines.push('Champ is thinking…');
+    lines.push(G.mode === 'online'
+      ? `Waiting on ${esc(playerName(state.currentPlayer))}…`
+      : 'Champ is thinking…');
   }
   $('msg').innerHTML = lines.join(' ');
 }
@@ -289,8 +330,10 @@ function flashSuitBanner(suit) {
 
 function doMove(move) {
   const mover = G.state.currentPlayer;
+  if (G.mode === 'online') onlinePushing = true;
   G.state = applyMove(G.state, move);
   save();
+  const movedState = G.state;
 
   // Pass & play: the instant the turn changes hands, stop showing cards —
   // otherwise the next player's hand flashes on screen before the handoff.
@@ -306,10 +349,14 @@ function doMove(move) {
     fx.drew = true;
   }
   render(fx);
+  if (G.mode === 'online') pushOnline(movedState);
 
   const status = getStatus(G.state);
   if (status.status !== 'active') {
-    setTimeout(() => showGameOver(status), move.type === 'play' ? 900 : 500);
+    setTimeout(() => {
+      const current = getStatus(G.state);
+      if (current.status !== 'active') showGameOver(current);
+    }, move.type === 'play' ? 900 : 500);
     return;
   }
 
@@ -422,6 +469,7 @@ function showGameOver(status) {
   save(); // clears the save — game's done
   const title = $('go-title');
   const line = $('go-line');
+  $('againBtn').classList.remove('hidden');
   const pick = WIN_LINES[(Math.random() * WIN_LINES.length) | 0];
 
   if (status.status === 'blocked') {
@@ -436,6 +484,11 @@ function showGameOver(status) {
   } else if (G.mode === 'bot') {
     title.textContent = 'YOU WIN! 🍁';
     line.textContent = pick + ' Champ tips his fins to you.';
+  } else if (G.mode === 'online') {
+    title.textContent = status.winner === online.myPlayer
+      ? 'YOU WIN! 🍁'
+      : playerName(status.winner).toUpperCase() + ' WINS! 🍁';
+    line.textContent = pick;
   } else {
     title.textContent = playerName(status.winner).toUpperCase() + ' WINS! 🍁';
     line.textContent = pick;
@@ -465,19 +518,349 @@ $('resumeBtn').addEventListener('click', () => {
   }
 });
 
-function goMenu() {
+function goMenu(source = null) {
+  if (online) {
+    if (!source || source.dataset.armed !== '1') {
+      if (source) {
+        source.dataset.armed = '1';
+        source.dataset.oldText = source.textContent;
+        source.textContent = 'LEAVE?';
+        source.classList.add('leave-armed');
+        clearTimeout(leaveTimer);
+        leaveTimer = setTimeout(() => resetLeaveButton(source), 2500);
+      }
+      return;
+    }
+    const match = online.match;
+    online = null;
+    onlinePushing = false;
+    match.leave(); // fire and forget: stops polling and clears this room session
+    resetLeaveButton(source);
+  }
   clearTimeout(botTimer);
   pendingEight = null;
   $('suitPicker').classList.add('hidden');
   $('resumeBtn').classList.toggle('hidden', !loadSave());
   show('menu');
+  refreshRejoin();
 }
 
-$('homeBtn').addEventListener('click', goMenu);
-$('menuBtn').addEventListener('click', goMenu);
+$('homeBtn').addEventListener('click', () => goMenu($('homeBtn')));
+$('menuBtn').addEventListener('click', () => goMenu($('menuBtn')));
 $('againBtn').addEventListener('click', () => {
-  startGame(G.mode, G.state.numPlayers);
+  if (G.mode === 'online') {
+    onlineRematch();
+  } else {
+    startGame(G.mode, G.state.numPlayers);
+  }
 });
+
+function resetLeaveButton(btn) {
+  if (!btn) return;
+  clearTimeout(leaveTimer);
+  btn.dataset.armed = '';
+  if (btn.dataset.oldText) btn.textContent = btn.dataset.oldText;
+  btn.dataset.oldText = '';
+  btn.classList.remove('leave-armed');
+}
+
+/* ------------------------------------------------------------- online play */
+// The room ferries the complete deterministic engine state. Seat number is
+// engine player number: host = player 0, and player 0 opens every fresh deal.
+
+$('hostBtn').addEventListener('click', () => openPanel('host'));
+$('joinBtn').addEventListener('click', () => openPanel('join'));
+$('opCancel').addEventListener('click', closePanel);
+$('opGo').addEventListener('click', onlineGo);
+$('lobbyCancel').addEventListener('click', cancelLobby);
+rejoinBtn.addEventListener('click', rejoinCrew);
+opCode.addEventListener('input', () => {
+  opCode.value = opCode.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+});
+[opName, opCode].forEach((el) => el.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') onlineGo();
+}));
+document.querySelectorAll('.seat-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    selectedSeats = +btn.dataset.seats;
+    document.querySelectorAll('.seat-btn').forEach((choice) => {
+      const selected = choice === btn;
+      choice.classList.toggle('selected', selected);
+      choice.setAttribute('aria-pressed', String(selected));
+    });
+  });
+});
+
+function openPanel(intent) {
+  panelIntent = intent;
+  opTitle.textContent = intent === 'host' ? 'START A CREW' : 'JOIN A CREW';
+  $('opGo').textContent = intent === 'host' ? 'GET A CODE' : 'DEAL ME IN';
+  opSeatsWrap.classList.toggle('hidden', intent !== 'host');
+  opCodeWrap.classList.toggle('hidden', intent === 'host');
+  opError.classList.add('hidden');
+  opName.value = opName.value || getName();
+  onlinePanel.classList.remove('hidden');
+  (intent === 'join' && opName.value ? opCode : opName).focus();
+}
+
+function closePanel() {
+  onlinePanel.classList.add('hidden');
+}
+
+const FRIENDLY_ERRORS = {
+  not_found: 'No crew with that code — double-check it.',
+  room_full: 'That table is already full.',
+  room_started: 'That crew already started the hand.',
+  not_ready: "Online play isn't switched on yet — check back soon!",
+  offline: "Can't reach the table — are you online?",
+};
+function friendly(err) {
+  if (err && err.code === 'wrong_game') {
+    return `That code is for ${String(err.detail || 'another game').replace(/-/g, ' ')} — head there to use it.`;
+  }
+  return (err && FRIENDLY_ERRORS[err.code]) || 'Cards went sideways — please try again.';
+}
+
+async function onlineGo() {
+  const name = opName.value.trim();
+  if (!name) {
+    opError.textContent = 'Every card sharp needs a name.';
+    opError.classList.remove('hidden');
+    opName.focus();
+    return;
+  }
+
+  const go = $('opGo');
+  go.disabled = true;
+  opError.classList.add('hidden');
+  try {
+    let match;
+    if (panelIntent === 'host') {
+      match = await OnlineMatch.create({
+        game: GAME,
+        name,
+        seats: selectedSeats,
+        state: createInitialState({ numPlayers: selectedSeats, seed: newSeed() }),
+      });
+    } else {
+      const code = opCode.value.trim();
+      if (code.length !== 4) {
+        opError.textContent = 'The crew code is 4 characters.';
+        opError.classList.remove('hidden');
+        opCode.focus();
+        return;
+      }
+      match = await OnlineMatch.join({ game: GAME, code, name });
+    }
+    closePanel();
+    if (match.status === 'waiting') openLobby(match);
+    else enterOnlineGame(match);
+  } catch (err) {
+    opError.textContent = friendly(err);
+    opError.classList.remove('hidden');
+  } finally {
+    go.disabled = false;
+  }
+}
+
+function renderLobby(match) {
+  lobbyCode.textContent = match.code;
+  lobbyNames.innerHTML = '';
+  const total = match.state?.numPlayers || selectedSeats;
+  for (let seat = 0; seat < total; seat++) {
+    const joined = match.seats.find((s) => s.seat === seat);
+    const item = document.createElement('li');
+    item.textContent = joined
+      ? `${joined.name} · Player ${seat + 1}`
+      : `Waiting for Player ${seat + 1}…`;
+    lobbyNames.appendChild(item);
+  }
+}
+
+function openLobby(match) {
+  $('lobbyHint').textContent = 'The rest of the crew taps JOIN A CREW and types it in.';
+  renderLobby(match);
+  lobbyEl.classList.remove('hidden');
+  lobbyEl._match = match;
+  match.start({
+    onStatus: (status) => {
+      if (status === 'playing') {
+        lobbyEl.classList.add('hidden');
+        enterOnlineGame(match);
+      } else if (status === 'over') {
+        $('lobbyHint').textContent = 'Someone left the table. Call it off and make a new crew.';
+      }
+    },
+    onPresence: () => renderLobby(match),
+    onError: () => {}, // waiting-room hiccups resolve on the next poll
+  });
+}
+
+function cancelLobby() {
+  const match = lobbyEl._match;
+  if (match) match.leave();
+  lobbyEl._match = null;
+  lobbyEl.classList.add('hidden');
+  refreshRejoin();
+}
+
+async function rejoinCrew() {
+  rejoinBtn.disabled = true;
+  try {
+    const match = await OnlineMatch.resume({ game: GAME });
+    if (match.status === 'waiting') openLobby(match);
+    else enterOnlineGame(match);
+  } catch {
+    clearSession(GAME);
+    refreshRejoin();
+  } finally {
+    rejoinBtn.disabled = false;
+  }
+}
+
+function refreshRejoin() {
+  const saved = savedSession(GAME);
+  rejoinBtn.classList.toggle('hidden', !saved);
+  if (saved) rejoinBtn.textContent = `↩ REJOIN YOUR CREW (${saved.code})`;
+}
+
+function enterOnlineGame(match) {
+  clearTimeout(botTimer);
+  online = { match, myPlayer: match.seat };
+  onlinePushing = false;
+  pollErrors = 0;
+  G = { mode: 'online', state: match.state };
+  handRevealed = true;
+  pendingEight = null;
+  $('suitPicker').classList.add('hidden');
+  onlinePanel.classList.add('hidden');
+  lobbyEl.classList.add('hidden');
+  showOnlineTruth({ dealAll: true });
+  match.start({
+    onState: onRemoteState,
+    onStatus: onRemoteStatus,
+    onPresence: onRemotePresence,
+    onError: onPollError,
+  });
+  if (match.status === 'over' && getStatus(G.state).status === 'active') {
+    onRemoteStatus('over');
+  }
+}
+
+// Online diffs can include draws, reshuffles, wild declarations, conflict
+// truth, or a fresh rematch. Repainting cold is deliberately safer than
+// guessing at an animation from hidden opponent cards.
+function showOnlineTruth(fx = {}) {
+  const status = getStatus(G.state);
+  if (status.status === 'active') {
+    show('game');
+    render(fx);
+  } else {
+    render();
+    showGameOver(status);
+  }
+}
+
+function onRemoteState(newState) {
+  if (!online) return;
+  G.state = newState;
+  onlinePushing = false;
+  pendingEight = null;
+  $('suitPicker').classList.add('hidden');
+  showOnlineTruth();
+}
+
+function onRemoteStatus(status) {
+  if (!online) return;
+  if (status !== 'over' || getStatus(G.state).status !== 'active') return;
+  const departed = online.match.opponents().find((opp) => opp.left);
+  if (departed) showOnlineDeparture(departed.name);
+}
+
+function onRemotePresence(opponents) {
+  if (!online) return;
+  pollErrors = 0;
+  const departed = opponents.find((opp) => opp.left);
+  if (departed && getStatus(G.state).status === 'active') {
+    showOnlineDeparture(departed.name);
+  }
+}
+
+function showOnlineDeparture(name) {
+  $('go-title').textContent = 'CREW MEMBER LEFT';
+  $('go-line').textContent = `${name || 'A player'} stepped away, so this hand is over.`;
+  $('againBtn').classList.add('hidden');
+  show('gameover');
+}
+
+function onPollError(err) {
+  if (!online) return;
+  if (err && err.code === 'not_found') {
+    online.match.stop();
+    clearSession(GAME);
+    online = null;
+    onlinePushing = false;
+    show('menu');
+    refreshRejoin();
+    return;
+  }
+  pollErrors++;
+  if (pollErrors >= 3 && getStatus(G.state).status === 'active') {
+    $('msg').textContent = 'CHOPPY CONNECTION — HANG TIGHT…';
+  }
+}
+
+async function pushOnline(nextState) {
+  const match = online && online.match;
+  if (!match) return;
+  let lastError = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await match.push(nextState, { over: getStatus(nextState).status !== 'active' });
+      if (!online || online.match !== match) return;
+      pollErrors = 0;
+      onlinePushing = false;
+      if (G.state === nextState && getStatus(G.state).status === 'active') render();
+      return;
+    } catch (err) {
+      lastError = err;
+      if (err && err.code === 'version_conflict') {
+        if (!online || online.match !== match) return;
+        G.state = match.state;
+        onlinePushing = false;
+        showOnlineTruth();
+        return;
+      }
+      if (attempt === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+    }
+  }
+  if (!online || online.match !== match) return;
+  // Neither publish landed. Roll back to the last server-confirmed state so
+  // this phone cannot keep playing a private, unsynced version of the hand.
+  G.state = match.state;
+  onlinePushing = false;
+  pollErrors = 3;
+  showOnlineTruth();
+  onPollError(lastError);
+}
+
+async function onlineRematch() {
+  if (!online || onlinePushing) return;
+  const again = $('againBtn');
+  again.disabled = true;
+  onlinePushing = true;
+  const fresh = createInitialState({
+    numPlayers: G.state.numPlayers,
+    seed: newSeed(),
+  });
+  G.state = fresh;
+  show('game');
+  render({ dealAll: true });
+  await pushOnline(fresh);
+  again.disabled = false;
+}
 
 /* ---------------------------------------------------------------- boot */
 

@@ -183,6 +183,42 @@ html, body {
 }
 .count-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 var(--pine); }
 
+#onlineSetup {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  width: min(100%, 380px);
+}
+.online-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--cream-dim);
+  text-shadow: 0 1px 3px rgba(18, 53, 36, 0.9);
+}
+#onlineRow {
+  display: flex;
+  gap: 9px;
+  width: 100%;
+}
+#onlineRow .mode-btn {
+  flex: 1;
+  min-height: 52px;
+  padding: 8px 10px;
+}
+.online-name, .online-blurb { display: block; }
+.online-name { font-size: 12px; font-weight: 900; }
+.online-blurb {
+  margin-top: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--cream-dim);
+}
+#rejoinBtn { margin-top: 2px; }
+
 #howto { text-align: center; display: flex; flex-direction: column; gap: 7px; }
 .howto-line { font-size: 12px; color: var(--cream-dim); font-weight: 600; }
 #howto .key {
@@ -623,6 +659,118 @@ html, body {
 .suit-btn.red { color: var(--card-red); }
 .suit-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 var(--pine); }
 
+/* ------------------------------------------------------------ online play */
+
+#onlinePanel, #lobby {
+  position: fixed;
+  padding: 20px;
+  background: rgba(10, 30, 19, 0.74);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+.op-card {
+  width: min(92vw, 350px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px 18px;
+  background: linear-gradient(180deg, var(--pine-2), var(--pine));
+  border: 2.5px solid rgba(246, 239, 220, 0.3);
+  border-radius: 20px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+  color: var(--cream);
+  text-align: center;
+}
+.op-title {
+  font-size: 16px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+.op-label, .lobby-label {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: var(--cream-dim);
+}
+.op-label { text-align: left; margin-bottom: -6px; }
+.op-card input {
+  width: 100%;
+  min-height: 48px;
+  padding: 12px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--cream);
+  background: rgba(10, 30, 19, 0.68);
+  border: 2px solid rgba(246, 239, 220, 0.3);
+  border-radius: 12px;
+  outline: none;
+  text-align: center;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.op-card input:focus { border-color: var(--sun); }
+#opCode { letter-spacing: 0.4em; text-transform: uppercase; font-size: 24px; }
+.op-error {
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffb09c;
+}
+.op-btns {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  align-items: center;
+  margin-top: 4px;
+}
+.op-btns .big-btn { min-height: 48px; font-size: 16px; padding: 10px 22px; }
+.seat-btns { display: flex; justify-content: center; gap: 10px; margin-top: 8px; }
+.seat-btn {
+  width: 52px;
+  height: 48px;
+  border: 2px solid rgba(246, 239, 220, 0.35);
+  border-radius: 12px;
+  background: rgba(246, 239, 220, 0.1);
+  color: var(--cream);
+  font-size: 20px;
+  font-weight: 900;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.seat-btn.selected {
+  color: var(--pine);
+  background: var(--sun);
+  border-color: var(--cream);
+}
+#lobbyCode {
+  padding: 6px 0;
+  color: var(--sun);
+  font-size: 44px;
+  font-weight: 900;
+  letter-spacing: 0.35em;
+  text-indent: 0.35em;
+  text-shadow: 0 3px 0 var(--pine);
+  animation: lobbyPulse 1.6s ease-in-out infinite;
+}
+@keyframes lobbyPulse { 50% { opacity: 0.75; } }
+#lobbyHint { font-size: 13px; color: var(--cream-dim); }
+#lobbyNames {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  list-style: none;
+}
+#lobbyNames li {
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1.5px solid rgba(246, 239, 220, 0.2);
+  border-radius: 10px;
+  background: rgba(246, 239, 220, 0.08);
+  color: var(--cream);
+  font-size: 13px;
+  font-weight: 800;
+}
+#homeBtn.leave-armed { width: auto; padding: 0 10px; color: var(--cream); font-weight: 900; }
+
 #suitBanner {
   position: absolute;
   top: 38%;
@@ -711,4 +859,11 @@ html, body {
 @media (min-width: 700px) {
   :root { --card-w: 92px; }
   #hand { justify-content: center; }
+}
+
+@media (max-height: 720px) {
+  .menu-inner { gap: 1.35vh; }
+  .l-deck { margin-top: 0.5vh; }
+  #howto { gap: 4px; }
+  .howto-line { font-size: 11px; }
 }
