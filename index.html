@@ -132,6 +132,7 @@
     <div id="topbar">
       <button id="homeBtn" aria-label="Back to menu">🏠</button>
       <div id="opponents"></div>
+      <button id="mute" aria-label="Mute sound" aria-pressed="false">🔊</button>
     </div>
 
     <div id="table">
@@ -155,6 +156,7 @@
     </div>
 
     <div id="handArea">
+      <div id="requirement"></div>
       <div id="handLabel"></div>
       <div id="hand"></div>
     </div>
@@ -174,6 +176,8 @@
 
     <!-- big suit-change banner after an 8 -->
     <div id="suitBanner" class="hidden"></div>
+    <div id="fxBanner" class="hidden" aria-hidden="true"></div>
+    <div id="fxStatus" class="sr-only" role="status" aria-live="polite"></div>
   </div>
 
   <!-- Round over -->
@@ -189,6 +193,23 @@
         <a id="brief-cta" href="https://www.btownbrief.com" target="_blank" rel="noopener">
           🗞️ Champ reads it. So should you.<br><strong>Read the BTown Brief →</strong>
         </a>
+      </div>
+      <div id="champ" class="hidden" aria-hidden="true">
+        <div id="champBubble"></div>
+        <svg viewBox="0 0 100 110" id="champSvg">
+          <path d="M30 110 C32 78 36 62 56 48" stroke="#3fa860" stroke-width="24" stroke-linecap="round" fill="none"/>
+          <ellipse cx="60" cy="42" rx="19" ry="15.5" fill="#3fa860"/>
+          <ellipse cx="73" cy="45" rx="10.5" ry="8.5" fill="#3fa860"/>
+          <ellipse cx="72" cy="47" rx="9" ry="6" fill="#f3e9c8"/>
+          <circle cx="79.5" cy="42" r="1.5" fill="#2e8149"/>
+          <path d="M68 49 q4.5 3.5 9 1" stroke="#1d5c33" stroke-width="2" stroke-linecap="round" fill="none"/>
+          <ellipse cx="63" cy="37" rx="5.5" ry="6.2" fill="#fff"/>
+          <circle cx="64.8" cy="37.5" r="3" fill="#1d2733"/>
+          <circle cx="65.9" cy="36.2" r="1" fill="#fff"/>
+          <path d="M52 30 q3 -9 11 -4.5 l-6.5 6.5 Z" fill="#2a7d45"/>
+          <path d="M44 39 q0 -10 9 -8 l-4.5 9 Z" fill="#2a7d45"/>
+          <path d="M38 52 q-2 -10 7 -10 l-2.5 10 Z" fill="#2a7d45"/>
+        </svg>
       </div>
     </div>
     <footer id="credit-go">

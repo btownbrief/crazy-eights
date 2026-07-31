@@ -9,6 +9,7 @@ import {
 } from './engine.js';
 import { chooseMove } from './bot.js';
 import { OnlineMatch, savedSession, clearSession, getName } from './rooms.js';
+import { sound } from './audio.js';
 
 const SAVE_KEY = 'crazy-eights-save-v1';
 const GAME = 'crazy-eights';
@@ -33,17 +34,27 @@ const lobbyEl = $('lobby');
 const lobbyCode = $('lobbyCode');
 const lobbyNames = $('lobbyNames');
 const rejoinBtn = $('rejoinBtn');
+const fxBanner = $('fxBanner');
+const fxStatus = $('fxStatus');
+const champEl = $('champ');
+const champBubble = $('champBubble');
 
 let G = null;            // { mode: 'bot' | 'pass' | 'online', state }
 let pendingEight = null; // card string waiting on a suit declaration
 let handRevealed = true; // pass & play: false until the handoff button is tapped
 let botTimer = null;
+let gameOverTimer = null;
 let online = null;       // { match, myPlayer } while seated in an online crew
 let onlinePushing = false;
 let pollErrors = 0;
 let panelIntent = 'host';
 let selectedSeats = 2;
 let leaveTimer = null;
+let confirmedState = null;
+let confirmedKey = '';
+let effectRun = 0;
+let effectTimers = [];
+let resolutionKey = '';
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -73,7 +84,7 @@ function humanTurn() {
     return !onlinePushing && online && online.match.status === 'playing' &&
       G.state.currentPlayer === online.myPlayer;
   }
-  return true;
+  return handRevealed;
 }
 
 function show(name) {
@@ -99,6 +110,58 @@ function loadSave() {
   } catch (e) { /* corrupted save — ignore it */ }
   return null;
 }
+
+/* ------------------------------------------------------- sound + effects */
+
+function stateKey(state) {
+  return state ? JSON.stringify(state) : '';
+}
+
+function setConfirmedStateCold(state) {
+  confirmedState = state;
+  confirmedKey = stateKey(state);
+}
+
+function later(fn, delay) {
+  const run = effectRun;
+  const timer = setTimeout(() => {
+    effectTimers = effectTimers.filter((candidate) => candidate !== timer);
+    if (run === effectRun) fn();
+  }, delay);
+  effectTimers.push(timer);
+}
+
+function clearPresentation() {
+  effectRun++;
+  effectTimers.forEach(clearTimeout);
+  effectTimers = [];
+  clearTimeout(flashSuitBanner.t);
+  clearTimeout(flashBanner.t);
+  flashSuitBanner.t = null;
+  flashBanner.t = null;
+  $('suitBanner').classList.add('hidden');
+  fxBanner.className = 'hidden';
+  fxBanner.textContent = '';
+  fxStatus.textContent = '';
+  $('msg').className = '';
+  $('msg').textContent = '';
+  document.querySelectorAll('.one-card').forEach((el) => el.classList.remove('one-card'));
+  champEl.classList.add('hidden');
+  screens.gameover.classList.remove('resolving');
+}
+
+function updateMuteButton() {
+  $('mute').textContent = sound.muted ? '🔇' : '🔊';
+  $('mute').setAttribute('aria-label', sound.muted ? 'Turn sound on' : 'Mute sound');
+  $('mute').setAttribute('aria-pressed', String(sound.muted));
+}
+
+$('mute').addEventListener('click', () => {
+  sound.toggleMuted();
+  updateMuteButton();
+});
+document.addEventListener('pointerdown', sound.unlock, { once: true, capture: true });
+document.addEventListener('keydown', sound.unlock, { once: true, capture: true });
 
 /* ---------------------------------------------------------------- cards */
 
@@ -186,6 +249,7 @@ function render(fx = {}) {
     if (G.mode === 'online' && p === online.myPlayer) continue;
     const chip = document.createElement('div');
     chip.className = 'opp' + (state.currentPlayer === p ? ' active' : '');
+    chip.dataset.player = p;
     const name = document.createElement('span');
     name.textContent = G.mode === 'bot' ? '🐉 Champ' : playerName(p);
     const count = document.createElement('span');
@@ -200,8 +264,10 @@ function render(fx = {}) {
   stock.classList.toggle('drawable', myTurn && canDrawNow);
   stock.classList.toggle('empty', state.stock.length === 0 && state.discard.length <= 1);
   $('stockCount').textContent = state.stock.length + ' LEFT';
-  if (fx.stockBump) {
-    stock.classList.remove('bump'); void stock.offsetWidth; stock.classList.add('bump');
+  stock.classList.remove('bump-1', 'bump-2', 'bump-3');
+  if (fx.drawLevel) {
+    void stock.offsetWidth;
+    stock.classList.add(`bump-${Math.min(3, fx.drawLevel)}`);
   }
 
   // discard + suit badge — show a couple of earlier plays peeking out
@@ -233,6 +299,7 @@ function render(fx = {}) {
   $('handLabel').textContent = G.mode === 'bot' || G.mode === 'online'
     ? 'your hand'
     : playerName(handOwner) + "'s hand";
+  $('handLabel').dataset.player = handOwner;
   const handEl = $('hand');
   handEl.innerHTML = '';
   handEl.classList.remove('wrap');
@@ -272,58 +339,202 @@ function render(fx = {}) {
     });
   }
 
-  renderMessage(moves, myTurn, mustPass, canDrawNow);
+  renderRequirement(moves, myTurn, mustPass);
+  if (fx.narrate) renderNarration();
 }
 
-function renderMessage(moves, myTurn, mustPass, canDrawNow) {
+function showNarration(html) {
+  const msg = $('msg');
+  msg.innerHTML = html;
+  msg.classList.remove('fresh');
+  void msg.offsetWidth;
+  msg.classList.add('fresh');
+  fxStatus.textContent = msg.textContent;
+}
+
+function renderNarration() {
   const state = G.state;
   const last = state.lastAction;
-  let lines = [];
+  if (!last) return;
+  const who = esc(playerName(last.player));
+  let text = '';
 
-  if (last) {
-    const who = esc(playerName(last.player));
-    if (last.type === 'play') {
-      if (last.declare) {
-        lines.push(`${who} threw a wild 8 — suit is now ${suitSpan(last.declare)} ${SUIT_NAME[last.declare]}!`);
-      } else {
-        lines.push(`${who} played ${rankChar(last.card)}${suitSpan(last.card[1])}.`);
-      }
-    } else if (last.type === 'draw') {
-      if (last.reshuffled) lines.push('Shuffled the pile back into the stock — Vermont thrift.');
-      if (G.mode === 'bot' && last.player === BOT) lines.push('Champ digs into the pile…');
-    } else if (last.type === 'pass') {
-      lines.push(`${who} passed. It happens to the best of us.`);
-    }
+  if (last.type === 'play') {
+    text = last.declare
+      ? `${who} threw a wild 8 — ${suitSpan(last.declare)} ${SUIT_NAME[last.declare]} is live.`
+      : `${who} played ${rankChar(last.card)}${suitSpan(last.card[1])}.`;
+  } else if (last.type === 'draw') {
+    text = last.reshuffled
+      ? 'The discards became the stock again — Vermont thrift.'
+      : `${who} drew from the pile.`;
+  } else if (last.type === 'pass') {
+    text = `${who} passed. It happens to the best of us.`;
   }
+  if (text) showNarration(text);
+}
 
-  if (getStatus(state).status !== 'active') { $('msg').innerHTML = lines.join(' '); return; }
-
+function renderRequirement(moves, myTurn, mustPass) {
+  const state = G.state;
+  const requirement = $('requirement');
+  if (G.mode === 'pass' && !handRevealed) {
+    requirement.textContent = 'Hand hidden — pass the phone';
+    return;
+  }
+  if (getStatus(state).status !== 'active') {
+    requirement.textContent = 'Hand complete';
+    return;
+  }
   if (myTurn) {
     const rank = rankChar(topCard(state));
     if (mustPass) {
-      lines.push('Nothing doing — pass it along.');
+      requirement.textContent = 'Three draws down — pass it along';
     } else if (!moves.some((m) => m.type === 'play')) {
       const left = 3 - state.drawnThisTurn;
-      lines.push(`No match? Tap the pile to draw (${left} draw${left === 1 ? '' : 's'} left).`);
+      const drawPrompts = {
+        3: 'No match — tap the pile (3 tries)',
+        2: 'Still hunting — 2 draws left',
+        1: 'Last chance — one draw left',
+      };
+      requirement.textContent = drawPrompts[left];
     } else {
-      lines.push(`${G.mode === 'pass' ? esc(playerName(state.currentPlayer)) + ': m' : 'M'}atch ${suitSpan(state.currentSuit)} or ${rank} — or go wild with an 8.`);
+      const prefix = G.mode === 'pass' ? `${esc(playerName(state.currentPlayer))}: ` : '';
+      requirement.innerHTML = `${prefix}match ${suitSpan(state.currentSuit)} or ${rank} · 8 is wild`;
     }
-  } else if (lines.length === 0) {
-    lines.push(G.mode === 'online'
-      ? `Waiting on ${esc(playerName(state.currentPlayer))}…`
-      : 'Champ is thinking…');
+  } else {
+    requirement.textContent = G.mode === 'online'
+      ? `Waiting on ${playerName(state.currentPlayer)}…`
+      : 'Champ is choosing…';
   }
-  $('msg').innerHTML = lines.join(' ');
 }
 
-function flashSuitBanner(suit) {
+function flashSuitBanner(suit, oneCard = false) {
   const banner = $('suitBanner');
-  banner.innerHTML = `SUIT IS NOW <span class="big-suit ${suit === 'H' || suit === 'D' ? 'red' : ''}">${SUIT_CHAR[suit]}</span> ${SUIT_NAME[suit].toUpperCase()}`;
+  const prefix = oneCard ? '🍁 ONE CARD! · ' : '';
+  banner.innerHTML = `${prefix}SUIT IS NOW <span class="big-suit ${suit === 'H' || suit === 'D' ? 'red' : ''}">${SUIT_CHAR[suit]}</span> ${SUIT_NAME[suit].toUpperCase()}`;
   banner.classList.remove('hidden');
   // restart the animation
   banner.style.animation = 'none'; void banner.offsetWidth; banner.style.animation = '';
   clearTimeout(flashSuitBanner.t);
-  flashSuitBanner.t = setTimeout(() => banner.classList.add('hidden'), 1550);
+  const run = effectRun;
+  flashSuitBanner.t = setTimeout(() => {
+    if (run === effectRun) banner.classList.add('hidden');
+  }, 1550);
+}
+
+function flashBanner(text) {
+  fxBanner.textContent = text;
+  fxStatus.textContent = text;
+  fxBanner.className = 'show';
+  fxBanner.style.animation = 'none';
+  void fxBanner.offsetWidth;
+  fxBanner.style.animation = '';
+  clearTimeout(flashBanner.t);
+  const run = effectRun;
+  flashBanner.t = setTimeout(() => {
+    if (run === effectRun) fxBanner.className = 'hidden';
+  }, 1350);
+}
+
+function pulseOneCard(player) {
+  const chip = document.querySelector(`.opp[data-player="${player}"]`);
+  const handOwner = G.mode === 'bot' ? 0
+    : G.mode === 'online' ? online.myPlayer
+      : G.state.currentPlayer;
+  const target = chip || (player === handOwner ? $('handLabel') : null);
+  if (!target) return;
+  target.classList.remove('one-card');
+  void target.offsetWidth;
+  target.classList.add('one-card');
+  later(() => target.classList.remove('one-card'), 1500);
+}
+
+function analyzeTransition(before, after, knownMove = null) {
+  if (!before || !after) return null;
+  if (getStatus(before).status !== 'active' &&
+      getStatus(after).status === 'active' &&
+      after.lastAction === null) {
+    return { action: { type: 'deal' }, oneCardPlayers: [] };
+  }
+  const action = after.lastAction;
+  if (!action || (knownMove && (
+    knownMove.type !== action.type ||
+    knownMove.card !== action.card ||
+    knownMove.declare !== action.declare
+  ))) return null;
+  const player = action.player;
+  if (!Number.isInteger(player) || !before.hands[player] || !after.hands[player]) return null;
+
+  if (action.type === 'play') {
+    if (!before.hands[player].includes(action.card) ||
+        after.hands[player].length !== before.hands[player].length - 1 ||
+        after.discard.length !== before.discard.length + 1) return null;
+  } else if (action.type === 'draw') {
+    if (after.hands[player].length !== before.hands[player].length + 1 ||
+        after.drawnThisTurn !== before.drawnThisTurn + 1) return null;
+  } else if (action.type === 'pass') {
+    if (after.currentPlayer === before.currentPlayer) return null;
+  } else {
+    return null;
+  }
+
+  const oneCardPlayers = [];
+  before.hands.forEach((hand, p) => {
+    if (hand.length > 1 && after.hands[p].length === 1) oneCardPlayers.push(p);
+  });
+  return { action, oneCardPlayers };
+}
+
+function visualFxFor(transition) {
+  if (!transition) return {};
+  if (transition.action.type === 'play') return { slap: true, suitPulse: true, narrate: true };
+  if (transition.action.type === 'draw') {
+    return { drawLevel: G.state.drawnThisTurn, drew: true, narrate: true };
+  }
+  if (transition.action.type === 'pass') return { narrate: true };
+  if (transition.action.type === 'deal') return { dealAll: true };
+  return {};
+}
+
+function fireTransitionEffects(transition) {
+  if (!transition) return;
+  const { action, oneCardPlayers } = transition;
+  const oneCard = oneCardPlayers.length > 0;
+  if (action.type === 'play') {
+    if (action.declare) {
+      flashSuitBanner(action.declare, oneCard);
+      sound.wild();
+    } else {
+      sound.slap();
+    }
+  } else if (action.type === 'draw') {
+    sound.draw(G.state.drawnThisTurn);
+  } else if (action.type === 'deal') {
+    sound.deal();
+  }
+
+  if (oneCard) {
+    oneCardPlayers.forEach(pulseOneCard);
+    if (!action.declare) flashBanner('🍁 ONE CARD!');
+    fxStatus.textContent = 'ONE CARD!';
+    sound.oneCard();
+  }
+}
+
+/* Accept one genuinely new transition. Cold starts and hydration instead use
+ * setConfirmedStateCold(), so reconnect/rerender never replays effects. */
+function acceptConfirmedState(next, knownMove = null) {
+  const key = stateKey(next);
+  if (key === confirmedKey) {
+    render();
+    return false;
+  }
+  const transition = analyzeTransition(confirmedState, next, knownMove);
+  confirmedState = next;
+  confirmedKey = key;
+  const canPresent = !screens.game.classList.contains('hidden');
+  render(canPresent ? visualFxFor(transition) : {});
+  if (canPresent) fireTransitionEffects(transition);
+  return true;
 }
 
 /* ---------------------------------------------------------------- moves */
@@ -339,21 +550,21 @@ function doMove(move) {
   // otherwise the next player's hand flashes on screen before the handoff.
   if (G.mode === 'pass' && G.state.currentPlayer !== mover) handRevealed = false;
 
-  const fx = {};
-  if (move.type === 'play') {
-    fx.slap = true;
-    fx.suitPulse = true;
-    if (move.declare) flashSuitBanner(move.declare);
-  } else if (move.type === 'draw') {
-    fx.stockBump = true;
-    fx.drew = true;
+  if (G.mode === 'online') {
+    // The room is the referee: paint the optimistic state quietly, then
+    // present its effects only after the push or a poll confirms it.
+    render();
+    pushOnline(movedState, move);
+    return;
   }
-  render(fx);
-  if (G.mode === 'online') pushOnline(movedState);
+  acceptConfirmedState(movedState, move);
 
   const status = getStatus(G.state);
   if (status.status !== 'active') {
-    setTimeout(() => {
+    clearTimeout(gameOverTimer);
+    const finalKey = stateKey(G.state);
+    gameOverTimer = setTimeout(() => {
+      if (!G || stateKey(G.state) !== finalKey) return;
       const current = getStatus(G.state);
       if (current.status !== 'active') showGameOver(current);
     }, move.type === 'play' ? 900 : 500);
@@ -365,7 +576,7 @@ function doMove(move) {
     if (G.mode === 'bot' && next === BOT) {
       botTimer = setTimeout(botStep, 850);
     } else if (G.mode === 'pass') {
-      setTimeout(() => showHandoff(next), move.type === 'play' ? 750 : 400);
+      later(() => showHandoff(next), move.type === 'play' ? 750 : 400);
     }
   }
 }
@@ -375,6 +586,8 @@ function onCardTap(card, el) {
   const playable = legalMoves(G.state).some((m) => m.type === 'play' && m.card === card);
   if (!playable) {
     el.classList.remove('nope'); void el.offsetWidth; el.classList.add('nope');
+    showNarration(`That card doesn't match ${suitSpan(G.state.currentSuit)} or ${rankChar(topCard(G.state))}.`);
+    sound.nope();
     return;
   }
   if (rankOf(card) === '8') {
@@ -390,10 +603,11 @@ $('stock').addEventListener('click', () => {
   const moves = legalMoves(G.state);
   if (moves.some((m) => m.type === 'draw')) { doMove({ type: 'draw' }); return; }
   if (moves.some((m) => m.type === 'play')) {
-    $('msg').innerHTML = "You've got a playable card — no drawing when you can play!";
+    showNarration("You've got a playable card — no drawing when you can play!");
   } else {
-    $('msg').innerHTML = "That's your three draws — pass it along.";
+    showNarration("That's your three draws — pass it along.");
   }
+  sound.nope();
 });
 
 $('passTurnBtn').addEventListener('click', () => {
@@ -434,8 +648,13 @@ function botStep() {
 
 function startGame(mode, numPlayers) {
   clearTimeout(botTimer);
+  clearTimeout(gameOverTimer);
+  clearPresentation();
+  resolutionKey = '';
   G = { mode, state: createInitialState({ numPlayers, seed: newSeed() }) };
+  setConfirmedStateCold(G.state);
   save();
+  sound.deal();
   if (mode === 'pass') {
     showHandoff(G.state.currentPlayer);
   } else {
@@ -446,6 +665,7 @@ function startGame(mode, numPlayers) {
 }
 
 function showHandoff(player) {
+  clearPresentation();
   handRevealed = false;
   $('handoffTitle').textContent = 'Pass the phone to ' + playerName(player);
   show('handoff');
@@ -454,7 +674,7 @@ function showHandoff(player) {
 $('handoffBtn').addEventListener('click', () => {
   handRevealed = true;
   show('game');
-  render({ dealAll: true });
+  render();
 });
 
 const WIN_LINES = [
@@ -463,9 +683,73 @@ const WIN_LINES = [
   'That hand deserves a spot at the farmers market.',
   'Smoother than a fresh line at Bolton Valley.',
 ];
+const CHAMP_CONCEDES_CLOSE = [
+  'One card from glory. Nice finish.',
+  'Too close for dry scales!',
+  'You slipped that one past me.',
+];
+const CHAMP_CONCEDES_BIG = [
+  'That was sharp. Fins tipped.',
+  'You cleaned the lake with me.',
+  'A proper Burlington card shark!',
+];
+const CHAMP_WINS_CLOSE = [
+  'By one whisker of a wave!',
+  'Close one. I felt the splash.',
+  'Nearly had me, neighbor.',
+];
+const CHAMP_WINS_BIG = [
+  'Lake monster, table monster.',
+  'The lake keeps its secrets.',
+  'Back in for another hand?',
+];
+const CHAMP_TIES = [
+  'Call it even over a creemee?',
+  'A very Vermont traffic jam.',
+];
+const usedChampLines = new Set();
 
-function showGameOver(status) {
+function pickFresh(lines) {
+  let available = lines.filter((text) => !usedChampLines.has(text));
+  if (available.length === 0) {
+    lines.forEach((text) => usedChampLines.delete(text));
+    available = lines;
+  }
+  const text = available[(Math.random() * available.length) | 0];
+  usedChampLines.add(text);
+  return text;
+}
+
+function localPlayerWon(status) {
+  if (G.mode === 'bot') return status.winners.includes(0);
+  if (G.mode === 'online') return status.winners.includes(online.myPlayer);
+  return true;
+}
+
+function champReaction(status) {
+  const humanWon = status.winners.includes(0);
+  const champWon = status.winners.includes(BOT);
+  if (humanWon && champWon) return pickFresh(CHAMP_TIES);
+  const loser = humanWon ? BOT : 0;
+  const close = G.state.hands[loser].length <= 2;
+  if (humanWon) return pickFresh(close ? CHAMP_CONCEDES_CLOSE : CHAMP_CONCEDES_BIG);
+  return pickFresh(close ? CHAMP_WINS_CLOSE : CHAMP_WINS_BIG);
+}
+
+function celebrateChamp(status) {
+  champBubble.textContent = champReaction(status);
+  champEl.classList.add('hidden');
+  void champEl.offsetWidth;
+  champEl.classList.remove('hidden');
+}
+
+function showGameOver(status, { celebrate = true } = {}) {
+  const key = stateKey(G.state) + '|' + status.status;
+  if (resolutionKey === key) return;
+  resolutionKey = key;
   clearTimeout(botTimer);
+  clearTimeout(gameOverTimer);
+  clearPresentation();
   save(); // clears the save — game's done
   const title = $('go-title');
   const line = $('go-line');
@@ -494,6 +778,12 @@ function showGameOver(status) {
     line.textContent = pick;
   }
   show('gameover');
+  if (celebrate) {
+    screens.gameover.classList.add('resolving');
+    sound[localPlayerWon(status) ? 'win' : 'lose']();
+    if (G.mode === 'bot') celebrateChamp(status);
+  }
+  later(() => $('againBtn').focus(), 0);
 }
 
 /* ---------------------------------------------------------------- menu */
@@ -507,13 +797,17 @@ document.querySelectorAll('.count-btn').forEach((btn) => {
 $('resumeBtn').addEventListener('click', () => {
   const saved = loadSave();
   if (!saved) { $('resumeBtn').classList.add('hidden'); return; }
+  clearTimeout(gameOverTimer);
+  clearPresentation();
   G = saved;
+  resolutionKey = '';
+  setConfirmedStateCold(G.state);
   if (G.mode === 'pass') {
     showHandoff(G.state.currentPlayer);
   } else {
     handRevealed = true;
     show('game');
-    render({ dealAll: true });
+    render();
     if (G.state.currentPlayer === BOT) botTimer = setTimeout(botStep, 850);
   }
 });
@@ -538,6 +832,8 @@ function goMenu(source = null) {
     resetLeaveButton(source);
   }
   clearTimeout(botTimer);
+  clearTimeout(gameOverTimer);
+  clearPresentation();
   pendingEight = null;
   $('suitPicker').classList.add('hidden');
   $('resumeBtn').classList.toggle('hidden', !loadSave());
@@ -732,6 +1028,9 @@ function refreshRejoin() {
 
 function enterOnlineGame(match) {
   clearTimeout(botTimer);
+  clearTimeout(gameOverTimer);
+  clearPresentation();
+  resolutionKey = '';
   online = { match, myPlayer: match.seat };
   onlinePushing = false;
   pollErrors = 0;
@@ -741,7 +1040,8 @@ function enterOnlineGame(match) {
   $('suitPicker').classList.add('hidden');
   onlinePanel.classList.add('hidden');
   lobbyEl.classList.add('hidden');
-  showOnlineTruth({ dealAll: true });
+  setConfirmedStateCold(G.state);
+  showOnlineTruth();
   match.start({
     onState: onRemoteState,
     onStatus: onRemoteStatus,
@@ -753,27 +1053,49 @@ function enterOnlineGame(match) {
   }
 }
 
-// Online diffs can include draws, reshuffles, wild declarations, conflict
-// truth, or a fresh rematch. Repainting cold is deliberately safer than
-// guessing at an animation from hidden opponent cards.
-function showOnlineTruth(fx = {}) {
+// Conflict, reconnect, and rejoin truth repaints cold. Only ordinary new
+// onState transitions pass through acceptConfirmedState() and earn effects.
+function showOnlineTruth(fx = {}, { celebrate = false } = {}) {
   const status = getStatus(G.state);
   if (status.status === 'active') {
     show('game');
     render(fx);
   } else {
     render();
-    showGameOver(status);
+    showGameOver(status, { celebrate });
   }
+}
+
+function scheduleOnlineGameOver(status) {
+  clearTimeout(gameOverTimer);
+  const finalKey = stateKey(G.state);
+  gameOverTimer = setTimeout(() => {
+    if (!online || stateKey(G.state) !== finalKey) return;
+    if (getStatus(G.state).status !== 'active') showGameOver(status);
+  }, 700);
 }
 
 function onRemoteState(newState) {
   if (!online) return;
+  const key = stateKey(newState);
   G.state = newState;
   onlinePushing = false;
+  if (key === confirmedKey) {
+    if (!screens.game.classList.contains('hidden')) render();
+    return;
+  }
+  const isRematch = confirmedState && getStatus(confirmedState).status !== 'active' &&
+    getStatus(newState).status === 'active' && newState.lastAction === null;
+  if (isRematch) {
+    clearPresentation();
+    resolutionKey = '';
+  }
   pendingEight = null;
   $('suitPicker').classList.add('hidden');
-  showOnlineTruth();
+  show('game');
+  acceptConfirmedState(newState);
+  const status = getStatus(newState);
+  if (status.status !== 'active') scheduleOnlineGameOver(status);
 }
 
 function onRemoteStatus(status) {
@@ -793,10 +1115,13 @@ function onRemotePresence(opponents) {
 }
 
 function showOnlineDeparture(name) {
+  clearTimeout(gameOverTimer);
+  clearPresentation();
   $('go-title').textContent = 'CREW MEMBER LEFT';
   $('go-line').textContent = `${name || 'A player'} stepped away, so this hand is over.`;
   $('againBtn').classList.add('hidden');
   show('gameover');
+  later(() => $('menuBtn').focus(), 0);
 }
 
 function onPollError(err) {
@@ -806,17 +1131,18 @@ function onPollError(err) {
     clearSession(GAME);
     online = null;
     onlinePushing = false;
+    clearPresentation();
     show('menu');
     refreshRejoin();
     return;
   }
   pollErrors++;
   if (pollErrors >= 3 && getStatus(G.state).status === 'active') {
-    $('msg').textContent = 'CHOPPY CONNECTION — HANG TIGHT…';
+    showNarration('CHOPPY CONNECTION — HANG TIGHT…');
   }
 }
 
-async function pushOnline(nextState) {
+async function pushOnline(nextState, knownMove = null) {
   const match = online && online.match;
   if (!match) return;
   let lastError = null;
@@ -826,7 +1152,12 @@ async function pushOnline(nextState) {
       if (!online || online.match !== match) return;
       pollErrors = 0;
       onlinePushing = false;
-      if (G.state === nextState && getStatus(G.state).status === 'active') render();
+      if (G.state === nextState) {
+        show('game');
+        acceptConfirmedState(nextState, knownMove);
+        const status = getStatus(nextState);
+        if (status.status !== 'active') scheduleOnlineGameOver(status);
+      }
       return;
     } catch (err) {
       lastError = err;
@@ -834,6 +1165,7 @@ async function pushOnline(nextState) {
         if (!online || online.match !== match) return;
         G.state = match.state;
         onlinePushing = false;
+        setConfirmedStateCold(G.state);
         showOnlineTruth();
         return;
       }
@@ -848,6 +1180,7 @@ async function pushOnline(nextState) {
   G.state = match.state;
   onlinePushing = false;
   pollErrors = 3;
+  setConfirmedStateCold(G.state);
   showOnlineTruth();
   onPollError(lastError);
 }
@@ -857,13 +1190,16 @@ async function onlineRematch() {
   const again = $('againBtn');
   again.disabled = true;
   onlinePushing = true;
+  clearTimeout(gameOverTimer);
+  clearPresentation();
+  resolutionKey = '';
   const fresh = createInitialState({
     numPlayers: G.state.numPlayers,
     seed: newSeed(),
   });
   G.state = fresh;
   show('game');
-  render({ dealAll: true });
+  render();
   await pushOnline(fresh);
   again.disabled = false;
 }
@@ -875,4 +1211,5 @@ window.addEventListener('resize', () => {
   if (G && !screens.game.classList.contains('hidden')) render();
 });
 
+updateMuteButton();
 goMenu();
