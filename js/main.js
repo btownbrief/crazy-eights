@@ -10,6 +10,10 @@ import {
 import { chooseMove } from './bot.js';
 import { OnlineMatch, savedSession, clearSession, getName } from './rooms.js';
 import { sound } from './audio.js';
+import {
+  lbEnabled, fetchTop, submitScore, renamePlayer, monthLabel,
+  getName as lbGetName, playerId as lbPlayerId,
+} from './leaderboard.js';
 
 const SAVE_KEY = 'crazy-eights-save-v1';
 const GAME = 'crazy-eights';
@@ -148,6 +152,7 @@ function clearPresentation() {
   document.querySelectorAll('.one-card').forEach((el) => el.classList.remove('one-card'));
   champEl.classList.add('hidden');
   screens.gameover.classList.remove('resolving');
+  resetLbPanel();
 }
 
 function updateMuteButton() {
@@ -783,6 +788,13 @@ function showGameOver(status, { celebrate = true } = {}) {
     sound[localPlayerWon(status) ? 'win' : 'lose']();
     if (G.mode === 'bot') celebrateChamp(status);
   }
+  if (G.mode === 'bot') {
+    // Submit only a fresh human went-out win vs Champ. A blocked gridlock,
+    // a loss, or a repaint of a finished hand shows the standings read-only.
+    // The resolutionKey check above makes this exactly-once per hand.
+    const humanWon = celebrate && status.status === 'won' && status.winner === 0;
+    updateLeaderboard(humanWon ? botWinScore() : 0);
+  }
   later(() => $('againBtn').focus(), 0);
 }
 
@@ -1203,6 +1215,119 @@ async function onlineRematch() {
   await pushOnline(fresh);
   again.disabled = false;
 }
+
+/* ------------------------------------------------------------- leaderboard */
+// Monthly board for vs-Champ wins only. Score = cards Champ was still
+// holding when you went out (a bigger stranded hand = a more crushing win),
+// clamped to 1..999. There is only one bot, so no difficulty bonus.
+
+const lbBox = $('lb');
+const lbList = $('lbList');
+const lbStatusEl = $('lbStatus');
+const lbForm = $('lbForm');
+const lbNameInput = $('lbNameInput');
+const lbThisBtn = $('lbThisBtn');
+const lbLastBtn = $('lbLastBtn');
+const lbRenameBtn = $('lbRenameBtn');
+let lbMonthOffset = 0;
+
+if (lbEnabled()) {
+  lbThisBtn.textContent = `🏆 ${monthLabel(0)}`;
+  lbLastBtn.textContent = monthLabel(-1);
+}
+
+function resetLbPanel() {
+  lbBox.classList.add('hidden');
+  lbForm.classList.add('hidden');
+  lbForm.dataset.pendingScore = '';
+}
+
+function botWinScore() {
+  return Math.max(1, Math.min(999, G.state.hands[BOT].length));
+}
+
+function lbScoreLabel(s) {
+  return `🃏 +${s} card${s === 1 ? '' : 's'}`;
+}
+
+// score > 0 submits a fresh win; score 0 just shows the standings read-only
+async function updateLeaderboard(score) {
+  if (!lbEnabled()) return;
+  lbBox.classList.remove('hidden');
+  if (score > 0 && !lbGetName()) {
+    // first win with no saved name: hold the score until they pick one
+    lbForm.classList.remove('hidden');
+    lbRenameBtn.classList.add('hidden');
+    lbStatusEl.textContent = 'Pick a name to join the monthly leaderboard!';
+    lbList.innerHTML = '';
+    lbForm.dataset.pendingScore = String(score);
+    return;
+  }
+  if (score > 0) {
+    try { await submitScore(score); } catch { /* offline — still show the board */ }
+  }
+  renderLbBoard();
+}
+
+async function renderLbBoard() {
+  lbForm.classList.add('hidden');
+  lbRenameBtn.classList.remove('hidden');
+  lbStatusEl.textContent = 'Loading…';
+  try {
+    const rows = await fetchTop(lbMonthOffset);
+    const me = lbPlayerId();
+    lbList.innerHTML = '';
+    rows.slice(0, 10).forEach((r, i) => {
+      const li = document.createElement('li');
+      if (r.player_id === me) li.className = 'me';
+      const medal = ['🥇', '🥈', '🥉'][i];
+      li.innerHTML = '<span class="rank"></span><span class="nm"></span><span class="sc"></span>';
+      li.querySelector('.rank').textContent = medal || `${i + 1}.`;
+      li.querySelector('.nm').textContent = r.name;
+      li.querySelector('.sc').textContent = lbScoreLabel(r.score);
+      lbList.appendChild(li);
+    });
+    const myRank = rows.findIndex((r) => r.player_id === me);
+    lbStatusEl.textContent = rows.length === 0
+      ? 'No scores yet this month — be the first!'
+      : myRank >= 0 ? `You're #${myRank + 1} of ${rows.length} this month` : '';
+  } catch {
+    lbStatusEl.textContent = 'Leaderboard unavailable (offline?)';
+  }
+}
+
+$('lbSaveBtn').addEventListener('click', async () => {
+  const name = lbNameInput.value.trim();
+  if (!name) { lbNameInput.focus(); return; }
+  const pending = Number(lbForm.dataset.pendingScore || 0);
+  lbForm.dataset.pendingScore = '';
+  try {
+    await renamePlayer(name); // saves locally + renames any existing rows
+    if (pending > 0) await submitScore(pending);
+  } catch { /* offline — the name is still saved locally */ }
+  renderLbBoard();
+});
+lbNameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') $('lbSaveBtn').click();
+});
+lbRenameBtn.addEventListener('click', () => {
+  lbNameInput.value = lbGetName();
+  lbForm.classList.remove('hidden');
+  lbRenameBtn.classList.add('hidden');
+  lbNameInput.focus();
+});
+lbThisBtn.addEventListener('click', () => {
+  lbMonthOffset = 0;
+  lbThisBtn.classList.add('sel');
+  lbLastBtn.classList.remove('sel');
+  renderLbBoard();
+});
+lbLastBtn.addEventListener('click', () => {
+  lbMonthOffset = -1;
+  lbLastBtn.classList.add('sel');
+  lbThisBtn.classList.remove('sel');
+  renderLbBoard();
+});
 
 /* ---------------------------------------------------------------- boot */
 
